@@ -33,9 +33,9 @@ This project is an enhanced version of the original [Minimal Chaac Weather](http
 
 ### Option 1: KDE Interface (Recommended)
 
-1. Right-click your desktop and select **Add Widgets**.
-2. Click **Get New Widgets** → **Download New Plasma Widgets**.
-3. Search for **Minimalist Weather Animated** and click **Install**.
+1. Right-click your taskbar and select Add Widgets.
+2. Click Get New Widgets > Download New Plasma Widgets.
+3. Search for Minimalist Weather Animated and click Install.
 
 ### Option 2: Local Installation (Manual)
 
