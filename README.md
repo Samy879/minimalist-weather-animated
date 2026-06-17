@@ -2,13 +2,18 @@
 
 A highly customizable, animated, and minimalist weather widget for KDE Plasma 6, focused on data clarity and modern design.
 
+
 This project is an enhanced version of the original [Minimal Chaac Weather](https://github.com/zayronxio/Chaac.Minimal.Weather).
 
 ## 📸 Showcase
 
-|                   Compact View                  |                  Animated Weather                 |              Interactive Charts              |
-| :---------------------------------------------: | :-----------------------------------------------: | :------------------------------------------: |
-| <img src="URL_IMAGE_COMPACT.png" width="100%"/> | <img src="URL_IMAGE_ANIMATION.gif" width="100%"/> | <img src="URL_GIF_CHARTS.gif" width="100%"/> |
+|                   Demo                            |
+| :-----------------------------------------------: |
+|<img width="600" height="337" alt="presentationv2" src="https://github.com/user-attachments/assets/f2eee166-7736-4c77-8348-161c0aff3e02" /> |
+
+|                  Dark Mode                |              Light Mode              |
+| :---------------------------------------: | :----------------------------------: |
+| <img src="https://images.pling.com/img/00/00/85/25/71/2356087/exemple-sombre.png" width="100%"/> | <img src="https://images.pling.com/img/00/00/85/25/71/2356087/exemple-clair.png" width="100%"/>
 
 ---
 
