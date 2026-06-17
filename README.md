@@ -46,7 +46,7 @@ https://github.com/user-attachments/assets/9bf4881e-68da-4c3b-9591-92e3b6b0d43a
 
 ### Option 2: Local Installation (Manual)
 
-1. Download the `.plasmoid` file from the [Releases](https://github.com/samy879/minimalist-weather-animated/releases/latest) page.
+1. Download the `.plasmoid` file from the [Releases](https://store.kde.org/p/2356087/https%3A%2F%2Fgithub.com%2Fsamy879%2Fminimalist-weather-animated%2Freleases%2Flatest%2Fdownload%2Fminimalist-weather-animated.plasmoid) page.
 2. Open a terminal and run:
 
 ```bash
