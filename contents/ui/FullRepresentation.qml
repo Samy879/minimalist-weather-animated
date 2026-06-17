@@ -11,9 +11,9 @@ Item {
 
     property var weatherData
 
-    property string temperatureUnit: root.temperatureUnit
+    property int temperatureUnit: root.temperatureUnit
 
-    readonly property string unitStr: (temperatureUnit === "0" || temperatureUnit == 0) ? "°C" : "°F"
+    readonly property string unitStr: (temperatureUnit === 0) ? "°C" : "°F"
     readonly property string currentTempText: (weatherData && weatherData.temperaturaActualPopup) ? weatherData.temperaturaActualPopup : "--"
     readonly property bool anyDetailEnabled: !!(root.showApparentTemp || root.showHumidity || root.showUVIndex || root.showWind)
     readonly property bool showBottomDetails: !!(anyDetailEnabled && root.showConditionFull)
@@ -73,7 +73,7 @@ Item {
             field: "wind_speed_10m",
             label: i18n("Wind"),
             tabLabel: i18n("Wind"),
-            unit: (unitStr === "°C" ? " km/h" : " mph"),
+            unit: (temperatureUnit === 0 ? " km/h" : " mph"),
             color: Qt.rgba(0.29, 0.50, 0.66, 1.0)
         },
         {
@@ -143,48 +143,227 @@ Item {
             weatherData.weatherData &&
             weatherData.temperaturaActual !== "--")
 
-            readonly property int weatherCode: weatherData && weatherData.codeweather ? parseInt(weatherData.codeweather) : 0
-            readonly property real windValue: weatherData && weatherData.windSpeed && weatherData.windSpeed !== "--" ? parseFloat(weatherData.windSpeed) : 0
+            // Vrai quand on inspecte un jour précis dans la vue détail
+            // (courbes). Dans ce cas, le fond animé doit refléter la météo
+            // DE CE JOUR-LÀ plutôt que la condition réelle actuelle.
+            readonly property bool dayDetailActive: rootItem.selectedDayIndex !== -1
+
+            // Code météo affiché par le fond. En vue détail, on suit
+            // désormais l'heure SURVOLÉE sur la courbe plutôt que le code
+            // unique du jour entier : avant, weatherCode restait figé sur
+            // dailyData.weather_code (un seul effet — pluie, brume, etc. —
+            // pour toute la journée), alors que isDay et windValue
+            // suivaient déjà viewedHour. weather_code existe aussi dans
+            // les données horaires (hourlyParams le demande déjà dans
+            // GetWeather.js), donc aucune requête supplémentaire n'est
+            // nécessaire : hourlySlice("weather_code") donne directement
+            // le code de l'heure pointée. Sans survol, on retombe sur le
+            // code du jour entier (comportement inchangé), et en vue
+            // classique sur la condition réelle actuelle.
+            readonly property int weatherCode: {
+                if (dayDetailActive) {
+                    // 1. Si on survole une heure précise, on prend la prévision de cette heure
+                    if (dayLineChart && dayLineChart.hoverIndex !== -1 && rootItem.hasHourlyData) {
+                        let codeSlice = rootItem.hourlySlice("weather_code");
+                        let hc = codeSlice[animationsLayers.viewedHour];
+                        if (hc !== undefined && hc !== null) return parseInt(hc);
+                    }
+
+                    // --- DÉBUT DE LA CORRECTION ---
+                    // 2. Pas de survol, mais on est sur le JOUR ACTUEL :
+                    // On affiche la condition réelle actuelle au lieu de la globale du jour.
+                    if (rootItem.selectedDayIndex === rootItem.currentDayIndex) {
+                        return weatherData && weatherData.codeweather ? parseInt(weatherData.codeweather) : 0;
+                    }
+                    // --- FIN DE LA CORRECTION ---
+
+                    // 3. Pas de survol, et on regarde un AUTRE jour (passé ou futur) :
+                    // On se rabat sur la tendance globale de ce jour-là.
+                    if (rootItem.dailyData && rootItem.dailyData.weather_code) {
+                        let code = rootItem.dailyData.weather_code[rootItem.selectedDayIndex];
+                        return (code !== undefined && code !== null) ? parseInt(code) : 0;
+                    }
+                    return 0;
+                }
+
+                // Vue classique (widget réduit ou courbes fermées)
+                return weatherData && weatherData.codeweather ? parseInt(weatherData.codeweather) : 0;
+            }
+
+            // Minute "regardée" dans la journée (0-1439) : celle survolée
+            // sur la courbe en vue détail (le marqueur suit la souris sur le
+            // graphique — précision à l'heure, c'est la seule offerte par
+            // les données horaires), sinon l'heure réelle actuelle à la
+            // minute près. Sans survol, on retombe simplement sur
+            // "maintenant".
+            readonly property int viewedMinutes: {
+                if (dayDetailActive && dayLineChart && dayLineChart.hoverIndex !== -1) {
+                    return dayLineChart.hoverIndex * 60;
+                }
+                let now = new Date();
+                return now.getHours() * 60 + now.getMinutes();
+            }
+            readonly property int viewedHour: Math.floor(viewedMinutes / 60)
+
+            // Extrait "HH:MM" d'une chaîne ISO Open-Meteo (ex: "2026-06-17T05:48")
+            // et la convertit en minutes depuis minuit. La requête utilise
+            // "timezone=auto", donc cette heure est déjà locale — pas de
+            // conversion de fuseau à faire ici.
+            function minutesFromIso(iso) {
+                if (!iso) return null;
+                let t = iso.split("T")[1];
+                if (!t) return null;
+                let p = t.split(":");
+                return parseInt(p[0]) * 60 + parseInt(p[1]);
+            }
+
+            // Jour/nuit à partir du VRAI lever et coucher de soleil du jour
+            // concerné (rootItem.dailyData.sunrise/sunset), plutôt que d'un
+            // seuil fixe 7h-20h qui mentait en plein hiver ou en plein été.
+            // Repli sur l'heuristique 7h-20h si ces données venaient à
+            // manquer (sécurité).
+            function isDayAt(dayIdx, minutesOfDay) {
+                let sunrise = (rootItem.dailyData && rootItem.dailyData.sunrise) ? minutesFromIso(rootItem.dailyData.sunrise[dayIdx]) : null;
+                let sunset  = (rootItem.dailyData && rootItem.dailyData.sunset)  ? minutesFromIso(rootItem.dailyData.sunset[dayIdx])  : null;
+                if (sunrise === null || sunset === null) {
+                    let h = Math.floor(minutesOfDay / 60);
+                    return (h >= 7 && h <= 20);
+                }
+                return minutesOfDay >= sunrise && minutesOfDay < sunset;
+            }
+
+            // Vent : pris dans les prévisions horaires du jour inspecté (à
+            // l'heure regardée) en vue détail, sinon le vent réel actuel.
+            readonly property real windValue: {
+                if (dayDetailActive && rootItem.hasHourlyData) {
+                    let windSlice = rootItem.hourlySlice("wind_speed_10m");
+                    let v = windSlice[animationsLayers.viewedHour];
+                    return (v !== undefined) ? parseFloat(v) : 0;
+                }
+                return weatherData && weatherData.windSpeed && weatherData.windSpeed !== "--" ? parseFloat(weatherData.windSpeed) : 0;
+            }
 
             readonly property bool isDay: {
-                if (weatherData && weatherData.weatherData && weatherData.weatherData.current) {
-                    return weatherData.weatherData.current.is_day === 1;
+                if (!dayDetailActive) {
+                    // Vue classique ("maintenant") : on privilégie le drapeau
+                    // is_day renvoyé par l'API pour l'instant présent — déjà
+                    // calculé côté serveur, c'est la source la plus fiable.
+                    if (weatherData && weatherData.weatherData && weatherData.weatherData.current) {
+                        return weatherData.weatherData.current.is_day === 1;
+                    }
+                    return isDayAt(rootItem.currentDayIndex, viewedMinutes);
                 }
-                let currentHour = new Date().getHours();
-                return (currentHour >= 7 && currentHour <= 20);
+                // Vue détail : vrai lever/coucher DU JOUR SÉLECTIONNÉ, comparé
+                // à l'heure regardée sur la courbe.
+                return isDayAt(rootItem.selectedDayIndex, viewedMinutes);
             }
+
+            // --- Soleil / Nuit en fondu croisé ---
+            // Avant : un seul Loader dont la "source" basculait entre les
+            // deux animations selon isDay. À chaque bascule, QML détruit
+            // entièrement l'ancien composant et instancie le nouveau —
+            // d'où la coupure nette. Ici, les deux animations restent
+            // chargées en permanence (donc jamais détruites/recréées) et on
+            // fait varier leur opacité en sens inverse avec un Behavior :
+            // le changement devient un fondu doux plutôt qu'un instantané.
+            // Comme isDay peut changer plusieurs fois rapidement pendant un
+            // survol de la courbe, le Behavior se "retargete" en douceur à
+            // chaque nouvelle valeur sans jamais sembler saccadé.
+            Loader {
+                anchors.fill: parent
+                active: !!(plasmoid.configuration.showAnimations && animationsLayers.visible)
+                source: "animations/soleil.qml"
+                opacity: animationsLayers.isDay ? 1.0 : 0.0
+                visible: opacity > 0.01
+                Behavior on opacity { NumberAnimation { duration: 1100; easing.type: Easing.InOutSine } }
+            }
+            Loader {
+                anchors.fill: parent
+                active: !!(plasmoid.configuration.showAnimations && animationsLayers.visible)
+                source: "animations/nuit.qml"
+                opacity: animationsLayers.isDay ? 0.0 : 1.0
+                visible: opacity > 0.01
+                Behavior on opacity { NumberAnimation { duration: 1100; easing.type: Easing.InOutSine } }
+            }
+            // --- Effets météo (nuage / pluie / neige / etc.) en fondu ---
+            // Même principe que Soleil/Nuit ci-dessus : avant, un Loader
+            // unique changeait de "source" selon le code météo, ce qui
+            // détruisait et recréait l'effet à chaque bascule — coupure
+            // nette, et de toute façon weatherCode ne suivait pas l'heure
+            // survolée donc l'effet ne changeait jamais pendant un survol.
+            // Maintenant que weatherCode suit viewedHour, le survol de la
+            // courbe peut faire défiler plusieurs conditions météo dans la
+            // même journée ; chaque effet reste chargé en permanence et
+            // seule son opacité varie, avec le même Behavior (1100ms) que
+            // pour isDay, pour un fondu cohérent entre tous les effets de
+            // fond plutôt qu'un instantané pour les uns et un fondu pour
+            // les autres.
+            readonly property bool showCloud:  weatherCode >= 3 && weatherCode !== 45 && weatherCode !== 48
+            readonly property bool showOrage:  weatherCode >= 95
+            readonly property bool showNeige:  (weatherCode >= 71 && weatherCode <= 77) || weatherCode === 85 || weatherCode === 86
+            readonly property bool showPluie:  (weatherCode >= 61 && weatherCode <= 67) || (weatherCode >= 80 && weatherCode <= 82)
+            readonly property bool showBruine: weatherCode >= 51 && weatherCode <= 57
+            readonly property bool showBrume:  weatherCode === 45 || weatherCode === 48
 
             Loader {
                 anchors.fill: parent
                 active: !!(plasmoid.configuration.showAnimations && animationsLayers.visible)
-                source: animationsLayers.isDay ? "animations/soleil.qml" : "animations/nuit.qml"
-            }
-            Loader {
-                anchors.fill: parent
-                active: {
-                    if (!plasmoid.configuration.showAnimations || !animationsLayers.visible) return false;
-                    let code = animationsLayers.weatherCode;
-                    return code >= 3 && code !== 45 && code !== 48;
-                }
                 source: "animations/nuage.qml"
+                opacity: animationsLayers.showCloud ? 1.0 : 0.0
+                visible: opacity > 0.01
+                Behavior on opacity { NumberAnimation { duration: 1100; easing.type: Easing.InOutSine } }
             }
             Loader {
                 anchors.fill: parent
-                active: !!(plasmoid.configuration.showAnimations && animationsLayers.visible && source !== "")
-                source: {
-                    let code = animationsLayers.weatherCode;
-                    if (code >= 95) return "animations/orage.qml";
-                    if ((code >= 71 && code <= 77) || code === 85 || code === 86) return "animations/neige.qml";
-                    if ((code >= 61 && code <= 67) || (code >= 80 && code <= 82)) return "animations/pluie.qml";
-                    if (code >= 51 && code <= 57) return "animations/bruine.qml";
-                    if (code === 45 || code === 48) return "animations/brume.qml";
-                    return "";
-                }
+                active: !!(plasmoid.configuration.showAnimations && animationsLayers.visible)
+                source: "animations/orage.qml"
+                opacity: animationsLayers.showOrage ? 1.0 : 0.0
+                visible: opacity > 0.01
+                Behavior on opacity { NumberAnimation { duration: 1100; easing.type: Easing.InOutSine } }
             }
             Loader {
                 anchors.fill: parent
-                active: !!(plasmoid.configuration.showAnimations && animationsLayers.visible && animationsLayers.windValue >= 20)
+                active: !!(plasmoid.configuration.showAnimations && animationsLayers.visible)
+                source: "animations/neige.qml"
+                opacity: animationsLayers.showNeige ? 1.0 : 0.0
+                visible: opacity > 0.01
+                Behavior on opacity { NumberAnimation { duration: 1100; easing.type: Easing.InOutSine } }
+            }
+            Loader {
+                anchors.fill: parent
+                active: !!(plasmoid.configuration.showAnimations && animationsLayers.visible)
+                source: "animations/pluie.qml"
+                opacity: animationsLayers.showPluie ? 1.0 : 0.0
+                visible: opacity > 0.01
+                Behavior on opacity { NumberAnimation { duration: 1100; easing.type: Easing.InOutSine } }
+            }
+            Loader {
+                anchors.fill: parent
+                active: !!(plasmoid.configuration.showAnimations && animationsLayers.visible)
+                source: "animations/bruine.qml"
+                opacity: animationsLayers.showBruine ? 1.0 : 0.0
+                visible: opacity > 0.01
+                Behavior on opacity { NumberAnimation { duration: 1100; easing.type: Easing.InOutSine } }
+            }
+            Loader {
+                anchors.fill: parent
+                active: !!(plasmoid.configuration.showAnimations && animationsLayers.visible)
+                source: "animations/brume.qml"
+                opacity: animationsLayers.showBrume ? 1.0 : 0.0
+                visible: opacity > 0.01
+                Behavior on opacity { NumberAnimation { duration: 1100; easing.type: Easing.InOutSine } }
+            }
+            // Vent : même traitement de cohérence — windValue suit déjà
+            // viewedHour, donc sans ce fondu le vent apparaîtrait/
+            // disparaîtrait brutalement pendant le survol alors que tous
+            // les autres effets de fond sont désormais en transition douce.
+            Loader {
+                anchors.fill: parent
+                active: !!(plasmoid.configuration.showAnimations && animationsLayers.visible)
                 source: "animations/vent.qml"
+                opacity: animationsLayers.windValue >= 20 ? 1.0 : 0.0
+                visible: opacity > 0.01
+                Behavior on opacity { NumberAnimation { duration: 1100; easing.type: Easing.InOutSine } }
             }
         }
     }
@@ -228,12 +407,23 @@ Item {
                         font.pixelSize: Kirigami.Units.gridUnit * 2.5
                         font.bold: true
                         leftPadding: currentTempText.length === 1 ? Kirigami.Units.gridUnit * 0.4 : 0
+                        // BUG FIX (texte noir lors d'un changement de thème) :
+                        // un bug connu de Kirigami/Plasma fait que la couleur
+                        // héritée d'un Label ne se repropage pas toujours de
+                        // façon fiable pendant une transition de thème,
+                        // surtout dans un sous-arbre animé en opacité comme
+                        // celui-ci (cf. headerSection, ligne ~302). Fixer
+                        // explicitement color: Kirigami.Theme.textColor crée
+                        // un binding direct, qui se réévalue de façon fiable
+                        // au lieu de dépendre de cette chaîne d'héritage.
+                        color: Kirigami.Theme.textColor
                     }
                     PlasmaComponents3.Label {
                         text: unitStr
                         font.pixelSize: Kirigami.Units.gridUnit * 1.5
                         font.bold: true
                         topPadding: Kirigami.Units.gridUnit * 0.2
+                        color: Kirigami.Theme.textColor
                     }
                 }
 
@@ -256,6 +446,7 @@ Item {
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                         leftPadding: Kirigami.Units.gridUnit * 0.55
+                        color: Kirigami.Theme.textColor
                     }
 
                     GridLayout {
@@ -278,7 +469,7 @@ Item {
                         // plus besoin de "visible: !!root.showX" sur chaque
                         // CompactGridItem, et GridLayout n'a rien à exclure.
                         readonly property var quickStats: [
-                            { label: i18n("Wind"),  value: (weatherData && weatherData.windSpeed !== "--") ? (weatherData.windSpeed + (unitStr === "°C" ? " km/h" : " mph")) : "--", show: !!root.showWind },
+                            { label: i18n("Wind"),  value: (weatherData && weatherData.windSpeed !== "--") ? (weatherData.windSpeed + (temperatureUnit === 0 ? " km/h" : " mph")) : "--", show: !!root.showWind },
                             { label: i18n("UV"),    value: (weatherData && weatherData.uvIndex !== "--") ? weatherData.uvIndex : "--", show: !!root.showUVIndex },
                             { label: i18n("Hum."),  value: (weatherData && weatherData.humidity !== "--") ? (weatherData.humidity + "%") : "--", show: !!root.showHumidity },
                             { label: i18n("Feels"), value: (weatherData && weatherData.apparentTemp !== "--") ? (weatherData.apparentTemp + unitStr) : "--", show: !!root.showApparentTemp }
@@ -331,6 +522,7 @@ Item {
                         font.capitalization: Font.Capitalize
                         font.pixelSize: Kirigami.Units.gridUnit * 0.65
                         opacity: 0.8
+                        color: Kirigami.Theme.textColor
                     }
 
                     Item {
@@ -339,9 +531,29 @@ Item {
                         Layout.preferredHeight: Kirigami.Units.gridUnit * 2.7
                         Layout.alignment: Qt.AlignHCenter
 
+                        // Pour le jour courant (dayIndex === currentDayIndex),
+                        // on utilise codeweather (condition réelle actuelle,
+                        // déjà rafraîchie par l'API à chaque requête) plutôt
+                        // que dailyData.weather_code[dayIndex], qui est un
+                        // résumé/tendance pour la journée entière et peut
+                        // donc être daté (ex: calculé tôt le matin, ou
+                        // représentant la condition dominante du jour plutôt
+                        // que celle de l'instant présent). Pour les autres
+                        // jours de la liste (demain, après-demain...), aucune
+                        // "condition actuelle" n'existe : on garde le code
+                        // météo journalier, seule donnée disponible pour un
+                        // jour qui n'est pas encore arrivé.
+                        readonly property bool isCurrentDay: dayIndex === rootItem.currentDayIndex
+                        readonly property int displayedCode: {
+                            if (isCurrentDay && weatherData && weatherData.codeweather !== undefined && weatherData.codeweather !== "--") {
+                                return parseInt(weatherData.codeweather);
+                            }
+                            return (rootItem.dailyData && rootItem.dailyData.weather_code) ? rootItem.dailyData.weather_code[dayIndex] : null;
+                        }
+
                         Kirigami.Icon {
                             anchors.fill: parent
-                            source: rootItem.dailyData ? weatherData.asingicon(rootItem.dailyData.weather_code[dayIndex]) : ""
+                            source: (rootItem.dailyData && iconWrapper.displayedCode !== null) ? weatherData.asingicon(iconWrapper.displayedCode) : ""
                         }
 
                         MouseArea {
@@ -361,11 +573,13 @@ Item {
                             text: rootItem.dailyData ? Math.round(rootItem.dailyData.temperature_2m_max[dayIndex]) + "°" : ""
                             font.bold: true
                             font.pixelSize: Kirigami.Units.gridUnit * 0.75
+                            color: Kirigami.Theme.textColor
                         }
                         PlasmaComponents3.Label {
                             text: rootItem.dailyData ? Math.round(rootItem.dailyData.temperature_2m_min[dayIndex]) + "°" : ""
                             opacity: 0.6
                             font.pixelSize: Kirigami.Units.gridUnit * 0.75
+                            color: Kirigami.Theme.textColor
                         }
                     }
                 }
@@ -389,7 +603,7 @@ Item {
                     { label: i18n("Apparent Temp"), value: (weatherData && weatherData.apparentTemp !== "--") ? (weatherData.apparentTemp + unitStr) : "--", show: !!root.showApparentTemp },
                     { label: i18n("Humidity"),      value: (weatherData && weatherData.humidity !== "--") ? (weatherData.humidity + "%") : "--", show: !!root.showHumidity },
                     { label: i18n("UV Index"),      value: (weatherData && weatherData.uvIndex !== "--") ? weatherData.uvIndex : "--", show: !!root.showUVIndex },
-                    { label: i18n("Wind"),          value: (weatherData && weatherData.windSpeed !== "--") ? (weatherData.windSpeed + (unitStr === "°C" ? " km/h" : " mph")) : "--", show: !!root.showWind }
+                    { label: i18n("Wind"),          value: (weatherData && weatherData.windSpeed !== "--") ? (weatherData.windSpeed + (temperatureUnit === 0 ? " km/h" : " mph")) : "--", show: !!root.showWind }
                 ].filter(function (d) { return d.show; })
 
                 Repeater {
@@ -487,6 +701,7 @@ Item {
                     font.bold: true
                     font.capitalization: Font.Capitalize
                     text: dayDetailView.dayLabelFull
+                    color: Kirigami.Theme.textColor
                 }
 
                 Item {
@@ -496,6 +711,7 @@ Item {
             }
 
             Components.LineChart {
+                id: dayLineChart
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.leftMargin: Kirigami.Units.smallSpacing
@@ -506,8 +722,11 @@ Item {
                 unit:        dayDetailView.activeUnit
                 values:      dayDetailView.activeValues
                 lineColor:   dayDetailView.activeColor
-                // currentHour est géré en interne par LineChart.qml via un
-                // Timer qui se rafraîchit chaque minute. Ne pas surcharger ici.
+                // currentHour est géré en interne par LineChart.qml ; le
+                // recalcul est forcé à chaque ouverture via "viewActive"
+                // (voir LineChart.qml pour le détail du fix anti-veille).
+                isToday:     rootItem.selectedDayIndex === rootItem.currentDayIndex
+                viewActive:  rootItem.selectedDayIndex !== -1
 
                 preciseTemp: root.preciseTempChart
                 chartType:   rootItem.activeChart
@@ -585,6 +804,7 @@ Item {
             opacity: 0.55
             Layout.fillWidth: true
             horizontalAlignment: Text.AlignHCenter
+            color: Kirigami.Theme.textColor
         }
         Row {
             Layout.alignment: Qt.AlignHCenter
@@ -606,16 +826,30 @@ Item {
                 text: parent._split.num
                 font.pixelSize: Kirigami.Units.gridUnit * 0.68
                 font.bold: true
+                color: Kirigami.Theme.textColor
             }
-            // Degree → haut, taille lisible, vraiment au-dessus du centre
+            // Degree : Symbole ° (Placé tout en haut, un peu plus petit)
             PlasmaComponents3.Label {
                 visible: parent._unitType === "degree"
-                text: parent._split.unit
+                text: parent._split.unit.charAt(0) // Extrait le "°"
+                font.pixelSize: Kirigami.Units.gridUnit * 0.45 // Taille réduite pour le petit rond
+                font.bold: true
+                leftPadding: 1.2
+                anchors.top: compactNumLabel.top
+                anchors.topMargin: 1 // Collé au plafond du chiffre
+                color: Kirigami.Theme.textColor
+            }
+
+            // Degree : Lettre C ou F (Placée légèrement plus bas)
+            PlasmaComponents3.Label {
+                visible: parent._unitType === "degree"
+                text: parent._split.unit.substring(1) // Extrait le "C" ou "F"
                 font.pixelSize: Kirigami.Units.gridUnit * 0.52
                 font.bold: true
-                leftPadding: 2
-                anchors.bottom: compactNumLabel.top
-                anchors.bottomMargin: -Kirigami.Units.gridUnit * 0.75
+                leftPadding: -0.5
+                anchors.top: compactNumLabel.top
+                anchors.topMargin: 1.8 // Descend la lettre de 3 pixels (Ajuste selon ton goût)
+                color: Kirigami.Theme.textColor
             }
             // Percent → légèrement sous le centre, gap à gauche
             PlasmaComponents3.Label {
@@ -625,7 +859,8 @@ Item {
                 font.bold: true
                 leftPadding: 3
                 anchors.verticalCenter: compactNumLabel.verticalCenter
-                anchors.verticalCenterOffset: -Kirigami.Units.gridUnit * 0.01
+                //anchors.verticalCenterOffset: -Kirigami.Units.gridUnit * 0
+                color: Kirigami.Theme.textColor
             }
             // Speed (km/h, mph) → baseline-aligned, small gap
             PlasmaComponents3.Label {
@@ -634,7 +869,13 @@ Item {
                 font.pixelSize: Kirigami.Units.gridUnit * 0.50
                 font.bold: true
                 leftPadding: 2
+
+                // On garde l'alignement sur la ligne de base du chiffre
                 anchors.baseline: compactNumLabel.baseline
+
+                anchors.baselineOffset: -0.5
+
+                color: Kirigami.Theme.textColor
             }
         }
     }
@@ -651,6 +892,7 @@ Item {
             Layout.fillWidth: true
             horizontalAlignment: Text.AlignHCenter
             opacity: 0.60
+            color: Kirigami.Theme.textColor
         }
         Row {
             Layout.alignment: Qt.AlignHCenter
@@ -671,24 +913,40 @@ Item {
                 text: parent._split.num
                 font.pixelSize: Kirigami.Units.gridUnit * 0.72
                 font.bold: true
+                color: Kirigami.Theme.textColor
             }
+            // Degree : Symbole ° (Placé tout en haut)
             PlasmaComponents3.Label {
                 visible: parent._unitType === "degree"
-                text: parent._split.unit
+                text: parent._split.unit.charAt(0)
                 font.pixelSize: Kirigami.Units.gridUnit * 0.48
                 font.bold: true
-                leftPadding: 2
-                anchors.verticalCenter: detailNumLabel.verticalCenter
-                anchors.verticalCenterOffset: -Kirigami.Units.gridUnit * 0.10
+                leftPadding: 1
+                anchors.top: detailNumLabel.top
+                anchors.topMargin: 1
+                color: Kirigami.Theme.textColor
+            }
+
+            // Degree : Lettre C ou F
+            PlasmaComponents3.Label {
+                visible: parent._unitType === "degree"
+                text: parent._split.unit.substring(1)
+                font.pixelSize: Kirigami.Units.gridUnit * 0.55
+                font.bold: true
+                leftPadding: 0.5
+                anchors.top: detailNumLabel.top
+                anchors.topMargin: 2 // Descend la lettre de 4 pixels (Ajuste selon ton goût)
+                color: Kirigami.Theme.textColor
             }
             PlasmaComponents3.Label {
                 visible: parent._unitType === "percent"
                 text: parent._split.unit
-                font.pixelSize: Kirigami.Units.gridUnit * 0.50
+                font.pixelSize: Kirigami.Units.gridUnit * 0.54
                 font.bold: true
-                leftPadding: 3
+                leftPadding: 2
                 anchors.verticalCenter: detailNumLabel.verticalCenter
-                anchors.verticalCenterOffset: Kirigami.Units.gridUnit * 0.06
+                //anchors.verticalCenterOffset: -Kirigami.Units.gridUnit * 0.01
+                color: Kirigami.Theme.textColor
             }
             PlasmaComponents3.Label {
                 visible: parent._unitType === "speed"
@@ -696,7 +954,14 @@ Item {
                 font.pixelSize: Kirigami.Units.gridUnit * 0.53
                 font.bold: true
                 leftPadding: 2
+
+                // On garde l'accroche sur la ligne de base
                 anchors.baseline: detailNumLabel.baseline
+
+                // On décale de quelques pixels vers le HAUT (Valeur négative)
+                anchors.baselineOffset: -0.55
+
+                color: Kirigami.Theme.textColor
             }
         }
     }

@@ -15,12 +15,13 @@ PlasmoidItem {
   }
 
   // Propriétés de configuration (Lien avec main.xml)
+  property bool showConditionOnPanel: Plasmoid.configuration.showConditionOnPanel
   property int borderRadius: Plasmoid.configuration.borderRadius
   property bool showAnimations: Plasmoid.configuration.showAnimations
   property bool boldTempPanel: Plasmoid.configuration.boldTempPanel
   property bool boldCondPanel: Plasmoid.configuration.boldCondPanel
   property bool reverseOrder: Plasmoid.configuration.reverseOrder
-  property string temperatureUnit: Plasmoid.configuration.temperatureUnit
+  property int temperatureUnit: Plasmoid.configuration.temperatureUnit
   property real sizeFontTemp: Plasmoid.configuration.sizeFontTemp
   property real sizeFontCond: Plasmoid.configuration.sizeFontCond
 

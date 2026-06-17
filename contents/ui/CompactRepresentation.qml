@@ -76,7 +76,7 @@ Item {
                     font.pixelSize: fontTemp
                 }
                 PlasmaComponents3.Label {
-                    text: (root.temperatureUnit === "0") ? "°C" : "°F"
+                    text: (root.temperatureUnit === 0) ? "°C" : "°F"
                     font.bold: Plasmoid.configuration.boldTempPanel // Mise en gras spécifique température
                     font.pixelSize: fontTemp
                 }

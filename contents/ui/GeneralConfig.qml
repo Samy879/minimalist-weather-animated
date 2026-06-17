@@ -7,6 +7,31 @@ Kirigami.ScrollablePage {
     id: configRoot
     title: i18n("General")
 
+    // --- ABSORPTION DES VALEURS PAR DÉFAUT (Pour nettoyer les logs) ---
+    property var cfg_useCoordinatesIpDefault
+    property var cfg_latitudeCDefault
+    property var cfg_longitudeCDefault
+    property var cfg_showConditionOnPanelDefault
+    property var cfg_showConditionFullDefault
+    property var cfg_reverseOrderDefault
+    property var cfg_temperatureUnitDefault
+    property var cfg_sizeFontTempDefault
+    property var cfg_sizeFontCondDefault
+    property var cfg_textweatherDefault
+    property var cfg_preciseTempDefault
+    property var cfg_preciseTempChartDefault
+    property var cfg_updateIntervalDefault
+    property var cfg_forecastStartDayDefault
+    property var cfg_boldTempPanelDefault
+    property var cfg_boldCondPanelDefault
+    property var cfg_showApparentTempDefault
+    property var cfg_showHumidityDefault
+    property var cfg_showUVIndexDefault
+    property var cfg_showWindDefault
+    property var cfg_showAnimationsDefault
+    property var cfg_refreshTriggerDefault
+    property var cfg_borderRadiusDefault
+
     // --- ALIAS DE CONFIGURATION ---
     property alias cfg_borderRadius: borderRadiusSpin.value
 

@@ -13,23 +13,50 @@ Item {
     property bool preciseTemp: false
     property int chartType: 0 // 0=Temp, 1=Hum, 2=Vent, 3=UV
 
-    // BUG FIX : currentHour est maintenu à jour par un Timer interne.
-    // La valeur passée depuis FullRepresentation (new Date().getHours()) était
-    // figée à l'heure de chargement du composant. Le Timer corrige ce problème.
+    // Vrai uniquement si le jour affiché est le jour courant. Un marqueur
+    // "heure actuelle" n'a de sens que sur la journée d'aujourd'hui ; sur un
+    // jour passé ou futur il serait trompeur (ex: "il est 7h" affiché sur les
+    // prévisions de demain). FullRepresentation le calcule via
+    // "selectedDayIndex === currentDayIndex".
+    property bool isToday: true
+
+    // Vrai pendant que cette vue détail est réellement affichée (jour
+    // sélectionné). Sert à couper le timer quand le graphique est caché ET,
+    // surtout, à FORCER un recalcul immédiat de l'heure à chaque ouverture.
+    //
+    // BUG FIX (point figé après une longue veille) : l'ancienne version se
+    // fiait uniquement à un Timer minute par minute comparant l'heure à la
+    // précédente. Pendant une mise en veille système, l'event loop Qt est
+    // gelé : aucun "tick" n'est traité, et selon la plateforme le timer peut
+    // ensuite tarder à se resynchroniser au réveil — le marqueur restait
+    // alors bloqué sur l'heure d'avant la veille. En recalculant l'heure
+    // directement à chaque ouverture de la vue (plutôt que de dépendre d'un
+    // historique de tics), le graphique est toujours correct dès l'affichage,
+    // indépendamment de ce qu'a fait le timer pendant que le widget dormait.
+    property bool viewActive: false
+
     property int currentHour: new Date().getHours()
 
-    Timer {
-        interval: 60000   // Vérifie toutes les minutes
-        running: chartRoot.visible // Optimisation : le timer s'arrête si le widget n'est pas affiché
-        repeat: true
-        onTriggered: {
-            let actualHour = new Date().getHours();
-
-            // On ne met à jour (et on ne redessine) QUE si l'heure a tourné
-            if (chartRoot.currentHour !== actualHour) {
-                chartRoot.currentHour = actualHour;
-            }
+    function refreshCurrentHour() {
+        let h = new Date().getHours();
+        if (chartRoot.currentHour !== h) {
+            chartRoot.currentHour = h;
         }
+    }
+
+    onViewActiveChanged: {
+        if (viewActive) {
+            refreshCurrentHour();
+            canvas.requestPaint(); // au cas où l'heure n'a pas changé mais que values l'a (autre jour)
+        }
+    }
+
+    Timer {
+        interval: 30000   // 30s : réactif sans solliciter le CPU pour rien
+        running: chartRoot.viewActive
+        repeat: true
+        triggeredOnStart: true // se resynchronise dès la réactivation, pas seulement après 30s
+        onTriggered: chartRoot.refreshCurrentHour()
     }
 
     property int hoverIndex: -1
@@ -133,6 +160,19 @@ Item {
                 text: chartRoot.label + (chartRoot.unit ? " (" + chartRoot.unit.trim() + ")" : "")
                 font.pixelSize: Kirigami.Units.gridUnit * 0.55
                 font.bold: true
+                // Couleur fixée explicitement plutôt que laissée à
+                // l'héritage automatique de palette Kirigami. BUG FIX
+                // (texte noir lors d'un changement de thème) : un bug connu
+                // de Kirigami/Plasma fait que la couleur héritée d'un Label
+                // ne se repropage pas toujours de façon fiable pendant une
+                // transition de thème ou une animation d'opacité/visibilité
+                // (cf. bug KDE 497054) — le Label peut alors rester
+                // figé sur la couleur de texte de l'ancien thème (sombre)
+                // alors que le fond, lui, a déjà basculé sombre, d'où un
+                // texte noir illisible. Un binding direct sur
+                // Kirigami.Theme.textColor se réévalue de façon fiable,
+                // indépendamment de cette chaîne d'héritage défaillante.
+                color: Kirigami.Theme.textColor
                 opacity: 1.0
             }
             Item { Layout.fillWidth: true }
@@ -142,6 +182,7 @@ Item {
                 (chartRoot.preciseTemp ? parseFloat(chartRoot.maxV.toFixed(1)) : Math.round(chartRoot.maxV))
                 : "--"
                 font.pixelSize: Kirigami.Units.gridUnit * 0.5
+                color: Kirigami.Theme.textColor
                 opacity: 0.9
             }
         }
@@ -233,7 +274,19 @@ Item {
                 let range = (chartRoot.maxV - chartRoot.minV) || 1;
                 let textColor = Kirigami.Theme.textColor;
                 let bgColor   = Kirigami.Theme.backgroundColor;
-                let axisOpacity  = 0.45;
+
+                // Un même alpha ne donne pas le même contraste perçu selon que
+                // le fond est clair ou sombre (sensibilité au contraste de
+                // l'œil + nombreux thèmes clairs avec un fond très lumineux où
+                // un trait fin à faible opacité se "noie"). On adapte donc le
+                // dosage à la luminosité réelle du fond plutôt que de figer une
+                // valeur unique qui ne marche bien que sur un thème sombre.
+                let bgLuminance = 0.2126 * bgColor.r + 0.7152 * bgColor.g + 0.0722 * bgColor.b;
+                let isLightTheme = bgLuminance > 0.5;
+
+                let axisOpacity  = 0.35;                          // axe X plein + ticks
+                let gridOpacity  = isLightTheme ? 0.22 : 0.12;     // grille horizontale en pointillés
+                let guideOpacity = isLightTheme ? 0.34 : 0.22;     // ligne verticale du marqueur
                 let labelOpacity = 0.80;
 
                 function xAt(i) { return pL + (w - pL - pR) * (i / (n - 1)); }
@@ -268,10 +321,10 @@ Item {
                         let yy = yAt(v);
 
                         if (s > 0) {
-                            ctx.strokeStyle = Qt.rgba(textColor.r, textColor.g, textColor.b, axisOpacity);
-                            ctx.lineWidth = 1.0;
+                            ctx.strokeStyle = Qt.rgba(textColor.r, textColor.g, textColor.b, gridOpacity);
+                            ctx.lineWidth = 0.9;
                             ctx.beginPath();
-                            ctx.setLineDash([3, 5]);
+                            ctx.setLineDash([2, 4]);
                             ctx.moveTo(pL, yy);
                             ctx.lineTo(w - pR, yy);
                             ctx.stroke();
@@ -363,10 +416,10 @@ Item {
                     let cx = xAt(curIdx);
                     let cy = yAt(pts[curIdx]);
 
-                    // Ligne verticale guide à l'heure courante
-                    ctx.strokeStyle = Qt.rgba(textColor.r, textColor.g, textColor.b, 0.30);
-                    ctx.lineWidth = 1.2;
-                    ctx.setLineDash([3, 4]);
+                    // Ligne verticale guide — toujours visible, discrète
+                    ctx.strokeStyle = Qt.rgba(textColor.r, textColor.g, textColor.b, guideOpacity);
+                    ctx.lineWidth = 1.1;
+                    ctx.setLineDash([2, 3]);
                     ctx.beginPath();
                     ctx.moveTo(cx, pT);
                     ctx.lineTo(cx, h - pB);
@@ -440,11 +493,18 @@ Item {
                 }
                 drawCurveLine(strokeStyle);
 
-                let curIdx = chartRoot.hoverIndex !== -1
-                ? chartRoot.hoverIndex
-                : Math.max(0, Math.min(chartRoot.currentHour, n - 1));
-                let pointColorStr = palette ? palette.fillColor(pts[curIdx]) : defaultColorStr;
-                drawMarker(strokeStyle, pointColorStr, curIdx);
+                let curIdx;
+                if (chartRoot.hoverIndex !== -1) {
+                    curIdx = chartRoot.hoverIndex;
+                } else if (chartRoot.isToday) {
+                    curIdx = Math.max(0, Math.min(chartRoot.currentHour, n - 1));
+                } else {
+                    curIdx = -1; // jour passé/futur : pas de marqueur "maintenant"
+                }
+                if (curIdx !== -1) {
+                    let pointColorStr = palette ? palette.fillColor(pts[curIdx]) : defaultColorStr;
+                    drawMarker(strokeStyle, pointColorStr, curIdx);
+                }
             }
 
             Component.onCompleted: requestPaint()
@@ -456,4 +516,18 @@ Item {
     onHeightChanged:      canvas.requestPaint()
     onCurrentHourChanged: canvas.requestPaint()
     onHoverIndexChanged:  canvas.requestPaint()
+
+    // BUG FIX (thème non actualisé) : onPaint lit directement
+    // Kirigami.Theme.textColor / backgroundColor à chaque dessin, mais
+    // aucun des signaux ci-dessus ne se déclenche quand l'utilisateur change
+    // de thème KDE (Plasma) à la volée. Le canvas ne se repeignait alors que
+    // par effet de bord, via onHoverIndexChanged déclenché en bougeant la
+    // souris. Connections écoute explicitement les couleurs du thème et
+    // force un repaint dès qu'elles changent, sans dépendre du hover.
+    Connections {
+        target: Kirigami.Theme
+        function onTextColorChanged() { canvas.requestPaint(); }
+        function onBackgroundColorChanged() { canvas.requestPaint(); }
+        function onHighlightColorChanged() { canvas.requestPaint(); }
+    }
 }
