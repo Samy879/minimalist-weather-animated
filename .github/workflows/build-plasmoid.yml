@@ -25,7 +25,7 @@ jobs:
       plasmoid_file: ${{ steps.package.outputs.plasmoid_file }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
 
@@ -43,7 +43,7 @@ jobs:
           echo "plasmoid_file=$plasmoid_file" >> "$GITHUB_OUTPUT"
 
       - name: Upload plasmoid artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: plasmoid
           path: ${{ steps.package.outputs.plasmoid_file }}
